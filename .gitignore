@@ -1,0 +1,5 @@
+# Pdf files
+*.pdf
+
+# Example lab
+example/
