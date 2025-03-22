@@ -147,14 +147,8 @@ def process_image(image_path, output_dir, is_color=True, rank=7):
 def main():
     # Директории для входных и выходных данных
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    input_dir = os.path.join(current_dir, "lab3", "images")
-    output_dir = os.path.join(current_dir, "lab3", "results")
-    
-    # Проверяем, существует ли директория lab3
-    if not os.path.exists(os.path.join(current_dir, "lab3")):
-        # Если нет вложенной директории lab3, значит скрипт запущен из lab3
-        input_dir = os.path.join(current_dir, "images")
-        output_dir = os.path.join(current_dir, "results")
+    input_dir = os.path.join(current_dir, "images")
+    output_dir = os.path.join(current_dir, "results")
     
     print(f"Поиск изображений в директории: {input_dir}")
     
