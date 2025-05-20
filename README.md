@@ -1,2 +1,1 @@
-# audiovisual
-Processing audiovisual information
+# Курс: Обработка аудиовизуальной информации

@@ -8,8 +8,16 @@ import concurrent.futures
 def load_image(image_path):
     """
     Загрузка изображения с использованием Pillow вместо OpenCV
+    Конвертирует индексированные изображения (с палитрой) в RGB формат
     """
-    return np.array(Image.open(image_path))
+    img = Image.open(image_path)
+    
+    # Проверяем, является ли изображение индексированным (mode='P')
+    if img.mode == 'P':
+        # Конвертируем индексированное изображение в RGB
+        img = img.convert('RGB')
+    
+    return np.array(img)
 
 def save_image(image, output_path):
     """
