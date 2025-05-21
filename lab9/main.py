@@ -159,6 +159,7 @@ peaks, _ = find_peaks(energy_by_window, height=0.5*max(energy_by_window), distan
 
 # Visualization
 plt.figure(figsize=(12, 6))
+plt.plot(time_stamps, energy_by_window, color='blue')
 
 # Mark peaks
 plt.plot([time_stamps[i] for i in peaks], 
