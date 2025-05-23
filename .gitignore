@@ -1,6 +1,9 @@
 # Pdf files
 *.pdf
 
+# Tips
+TIPS.md
+
 # Example lab
 example/
 
