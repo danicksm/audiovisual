@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 INPUT_IMAGE = "phrase.bmp"
 RESULTS_DIR = "results"
 THRESHOLD = 127  # Threshold for binarization
+MIN_CHAR_WIDTH = 5  # Минимальная ширина символа в пикселях
+GAP_SIZE = 1  # Уменьшаем размер промежутка между символами (было 2)
+OVERLAP_THRESHOLD = 0.3  # Максимальное допустимое перекрытие прямоугольников (было 0.5)
 
 # Ensure results directory exists
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -129,8 +132,8 @@ def segment_characters(binary_image, vertical_profile, horizontal_profile):
     logger.info("Segmenting characters")
     
     # 1. Identify text lines using horizontal profile
-    # Threshold for line detection (adjust as needed)
-    line_threshold = max(horizontal_profile) * 0.05
+    # Use a lower threshold to capture all parts of characters
+    line_threshold = max(horizontal_profile) * 0.02  # Снижен порог для захвата высоких элементов
     
     # Find rows where profile exceeds threshold
     rows_with_text = np.where(horizontal_profile > line_threshold)[0]
@@ -139,67 +142,141 @@ def segment_characters(binary_image, vertical_profile, horizontal_profile):
         logger.warning("No text lines detected")
         return []
     
-    # Group consecutive rows to identify lines
-    line_ranges = []
-    line_start = rows_with_text[0]
+    # Get the full text line range
+    line_start = np.min(rows_with_text)
+    line_end = np.max(rows_with_text)
     
-    for i in range(1, len(rows_with_text)):
-        if rows_with_text[i] - rows_with_text[i-1] > 1:  # Gap between text lines
-            line_end = rows_with_text[i-1]
-            line_ranges.append((line_start, line_end))
-            line_start = rows_with_text[i]
+    # 2. Segment characters using vertical profile and connected components
+    # Extract the text line
+    line_image = binary_image[line_start:line_end+1, :]
     
-    # Add the last line
-    line_ranges.append((line_start, rows_with_text[-1]))
+    # Use a lower threshold for character detection
+    char_threshold = max(vertical_profile) * 0.005  # Еще ниже порог для захвата всех символов (было 0.01)
     
-    # 2. For each line, identify characters using vertical profile
+    # Find columns where profile exceeds threshold
+    cols_with_text = np.where(vertical_profile > char_threshold)[0]
+    
+    if len(cols_with_text) == 0:
+        logger.warning("No characters detected")
+        return []
+    
+    # Метод 1: Используем анализ вертикального профиля для нахождения разрывов между символами
+    # Находим разрывы (нулевые области) в вертикальном профиле
+    
+    # Сначала сгладим профиль для устранения шума
+    smoothed_profile = vertical_profile.copy()
+    window_size = 3
+    for i in range(window_size, len(vertical_profile) - window_size):
+        smoothed_profile[i] = np.mean(vertical_profile[i-window_size:i+window_size+1])
+    
+    # Находим локальные минимумы в профиле
+    local_mins = []
+    for i in range(1, len(smoothed_profile)-1):
+        if (smoothed_profile[i] < smoothed_profile[i-1] and 
+            smoothed_profile[i] <= smoothed_profile[i+1] and
+            smoothed_profile[i] < max(smoothed_profile) * 0.3):  # Только значимые минимумы
+            local_mins.append(i)
+    
+    # Находим разрывы на основе локальных минимумов и порога
+    gaps = []
+    i = 0
+    while i < len(cols_with_text) - 1:
+        if cols_with_text[i+1] - cols_with_text[i] > GAP_SIZE:
+            # Проверяем, есть ли локальный минимум в этом месте
+            gap_center = (cols_with_text[i] + cols_with_text[i+1]) // 2
+            is_local_min = any(abs(lm - gap_center) < 3 for lm in local_mins)
+            
+            if is_local_min or cols_with_text[i+1] - cols_with_text[i] > 2 * GAP_SIZE:
+                gaps.append((cols_with_text[i], cols_with_text[i+1]))
+        i += 1
+    
+    # Создаем границы символов на основе разрывов
+    char_boundaries = []
+    if len(gaps) == 0:  # Если разрывов нет, считаем всё одним символом
+        char_boundaries.append((cols_with_text[0], cols_with_text[-1]))
+    else:
+        # Добавляем начало первого символа
+        char_boundaries.append((cols_with_text[0], gaps[0][0]))
+        
+        # Добавляем символы между разрывами
+        for i in range(len(gaps)-1):
+            char_boundaries.append((gaps[i][1], gaps[i+1][0]))
+        
+        # Добавляем последний символ
+        char_boundaries.append((gaps[-1][1], cols_with_text[-1]))
+    
+    # Метод 2: Дополнительно используем анализ связных компонент
+    # Создаем копию изображения для обнаружения связных компонент
+    contours, _ = cv2.findContours(line_image.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Создаем прямоугольники для каждой связной компоненты
+    contour_boxes = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w >= MIN_CHAR_WIDTH:  # Фильтруем слишком маленькие компоненты
+            contour_boxes.append((x, y + line_start, w, h))
+    
+    # Объединяем результаты обоих методов
     bounding_boxes = []
     
-    for line_start, line_end in line_ranges:
-        # Extract vertical profile for this line only
-        line_image = binary_image[line_start:line_end+1, :]
-        line_vertical_profile = np.sum(line_image, axis=0)
-        
-        # Threshold for character detection
-        char_threshold = max(line_vertical_profile) * 0.05
-        
-        # Find columns where profile exceeds threshold
-        cols_with_text = np.where(line_vertical_profile > char_threshold)[0]
-        
-        if len(cols_with_text) == 0:
-            continue
-        
-        # Group consecutive columns to identify characters
-        char_start = cols_with_text[0]
-        
-        for i in range(1, len(cols_with_text)):
-            if cols_with_text[i] - cols_with_text[i-1] > 1:  # Gap between characters
-                char_end = cols_with_text[i-1]
-                
-                # Create bounding box (x, y, width, height)
-                x = char_start
-                y = line_start
-                w = char_end - char_start + 1
-                h = line_end - line_start + 1
-                
-                bounding_boxes.append((x, y, w, h))
-                
-                char_start = cols_with_text[i]
-        
-        # Add the last character in the line
-        char_end = cols_with_text[-1]
-        x = char_start
-        y = line_start
-        w = char_end - char_start + 1
-        h = line_end - line_start + 1
-        
-        bounding_boxes.append((x, y, w, h))
+    # Добавляем прямоугольники на основе разрывов в вертикальном профиле
+    for x_start, x_end in char_boundaries:
+        width = x_end - x_start + 1
+        if width >= MIN_CHAR_WIDTH:  # Проверяем минимальную ширину
+            bounding_boxes.append((x_start, line_start, width, line_end - line_start + 1))
     
-    # Sort bounding boxes from left to right, top to bottom
-    bounding_boxes.sort(key=lambda box: (box[1], box[0]))
+    # Добавляем прямоугольники на основе связных компонент
+    bounding_boxes.extend(contour_boxes)
     
-    logger.info(f"Detected {len(bounding_boxes)} characters")
-    return bounding_boxes
+    # Удаляем дубликаты и перекрывающиеся прямоугольники
+    filtered_boxes = []
+    for box in bounding_boxes:
+        add_box = True
+        x1, y1, w1, h1 = box
+        
+        # Проверяем, не перекрывается ли текущий прямоугольник с уже добавленными
+        for existing_box in filtered_boxes:
+            x2, y2, w2, h2 = existing_box
+            
+            # Вычисляем площадь перекрытия
+            overlap_x = max(0, min(x1 + w1, x2 + w2) - max(x1, x2))
+            overlap_y = max(0, min(y1 + h1, y2 + h2) - max(y1, y2))
+            overlap_area = overlap_x * overlap_y
+            
+            # Вычисляем площадь текущего прямоугольника
+            box_area = w1 * h1
+            
+            # Если перекрытие слишком большое, не добавляем текущий прямоугольник
+            if overlap_area > OVERLAP_THRESHOLD * box_area:  # Используем константу вместо хардкода
+                add_box = False
+                break
+        
+        if add_box:
+            filtered_boxes.append(box)
+    
+    # Проверяем, нет ли слишком широких прямоугольников, которые могут содержать несколько символов
+    max_char_width = np.median([box[2] for box in filtered_boxes]) * 1.5
+    refined_boxes = []
+    
+    for box in filtered_boxes:
+        x, y, w, h = box
+        if w > max_char_width and w > 20:  # Прямоугольник слишком широкий
+            # Пытаемся разделить его на несколько символов
+            num_splits = max(2, int(w / (max_char_width * 0.8)))
+            split_width = w // num_splits
+            
+            for i in range(num_splits):
+                new_x = x + i * split_width
+                new_w = split_width if i < num_splits - 1 else w - (i * split_width)
+                refined_boxes.append((new_x, y, new_w, h))
+        else:
+            refined_boxes.append(box)
+    
+    # Сортируем прямоугольники слева направо (для иврита - справа налево при чтении, но в коде мы сохраняем слева направо)
+    refined_boxes.sort(key=lambda box: box[0])
+    
+    logger.info(f"Detected {len(refined_boxes)} characters")
+    return refined_boxes
 
 def visualize_segmentation(original_image, binary_image, bounding_boxes):
     """
@@ -218,7 +295,7 @@ def visualize_segmentation(original_image, binary_image, bounding_boxes):
     # Draw bounding boxes
     for i, (x, y, w, h) in enumerate(bounding_boxes):
         cv2.rectangle(result_image, (x, y), (x + w, y + h), (0, 255, 0), 1)
-        # Add character number
+        # Отключаем номера символов, чтобы не загромождать изображение
         # cv2.putText(result_image, str(i+1), (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
     
     # Save result image
@@ -262,6 +339,12 @@ def extract_characters(original_image, binary_image, bounding_boxes):
     characters = []
     
     for i, (x, y, w, h) in enumerate(bounding_boxes):
+        # Проверяем, не выходит ли область за границы изображения
+        x = max(0, x)
+        y = max(0, y)
+        w = min(w, binary_image.shape[1] - x)
+        h = min(h, binary_image.shape[0] - y)
+        
         # Extract character from binary image
         char_img = binary_image[y:y+h, x:x+w]
         
@@ -372,8 +455,8 @@ def detect_text_block(binary_image, horizontal_profile, vertical_profile):
     logger.info("Detecting text block")
     
     # Threshold for detection
-    h_threshold = max(horizontal_profile) * 0.05
-    v_threshold = max(vertical_profile) * 0.05
+    h_threshold = max(horizontal_profile) * 0.02  # Снижен порог для захвата всех частей символов
+    v_threshold = max(vertical_profile) * 0.02  # Снижен порог для захвата всех частей символов
     
     # Find rows and columns with text
     rows_with_text = np.where(horizontal_profile > h_threshold)[0]
@@ -457,4 +540,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
