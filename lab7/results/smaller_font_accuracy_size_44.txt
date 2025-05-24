@@ -1,0 +1,4 @@
+Reference string: אבגדהוזחטיכלמנסעפצקרשת
+Font size: 44
+Recognized string: שסגףמזזחשזמחםגםטשםפדשת
+Correct recognitions: 5/22 (22.73%)

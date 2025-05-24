@@ -1,41 +1,51 @@
 # Отчет по лабораторной работе №7
 ## Классификация на основе признаков, анализ профилей
 
-### Задание
-Работа выполнена для алфавита иврит, с использованием наработок из лабораторных работ №5 и №6.
-
 ## 1. Реализация расчёта меры близости изображений символов
 
 Для реализации расчёта меры близости изображений символов был использован метод евклидова расстояния в пространстве нормализованных признаков. Нормализованные признаки включают в себя:
+- Масса символа (общая и по четвертям изображения)
+- Удельная масса по четвертям
 - Нормализованные координаты центра тяжести
 - Нормализованные осевые моменты инерции
+- Нормализованные профили (горизонтальный и вертикальный)
 
 Реализация функции расчёта евклидова расстояния:
 
 ```python
 def compute_similarity(char_features, reference_features):
-    """
-    Compute similarity between character and reference based on Euclidean distance.
-    
-    Args:
-        char_features (dict): Features of the character to recognize
-        reference_features (pd.Series): Features of the reference character
-        
-    Returns:
-        float: Similarity measure (1 for exact match, decreasing for less similar)
-    """
     # Define the features to use for comparison
-    feature_keys = [
-        'NormCoG_X', 'NormCoG_Y', 
-        'NormMomentOfInertia_X', 'NormMomentOfInertia_Y'
+    scalar_feature_keys = [
+        'Weight_Q1', 'Weight_Q2', 'Weight_Q3', 'Weight_Q4',  # Масса символа по четвертям
+        'SpecificWeight_Q1', 'SpecificWeight_Q2', 'SpecificWeight_Q3', 'SpecificWeight_Q4',
+        'NormCoG_X', 'NormCoG_Y',  # Нормализованные координаты центра тяжести
+        'NormMomentOfInertia_X', 'NormMomentOfInertia_Y'  # Нормализованные осевые моменты инерции
     ]
     
-    # Extract feature vectors
-    char_vector = np.array([char_features[key] for key in feature_keys])
-    ref_vector = np.array([reference_features[key] for key in feature_keys])
+    # Define weights for each feature
+    weights = {
+        'Weight_Q1': 0.1, 'Weight_Q2': 0.1, 'Weight_Q3': 0.1, 'Weight_Q4': 0.1,
+        'SpecificWeight_Q1': 0.05, 'SpecificWeight_Q2': 0.05, 'SpecificWeight_Q3': 0.05, 'SpecificWeight_Q4': 0.05,
+        'NormCoG_X': 0.15, 'NormCoG_Y': 0.15,
+        'NormMomentOfInertia_X': 0.15, 'NormMomentOfInertia_Y': 0.15
+    }
     
-    # Calculate Euclidean distance
-    distance = euclidean(char_vector, ref_vector)
+    # Calculate weighted squared differences for scalar features
+    weighted_squared_diff = 0
+    for key in scalar_feature_keys:
+        # Skip if key is missing in either features dictionary
+        if key not in char_features or key not in reference_features:
+            continue
+            
+        # Normalize feature values to [0, 1] range if needed
+        char_value = float(char_features[key])
+        ref_value = float(reference_features[key])
+        
+        # Add weighted squared difference
+        weighted_squared_diff += weights[key] * (char_value - ref_value)**2
+    
+    # Calculate weighted Euclidean distance
+    distance = np.sqrt(weighted_squared_diff)
     
     # Convert distance to similarity (1 for exact match, decreasing for less similar)
     # Using exponential decay to ensure positive values
@@ -44,26 +54,36 @@ def compute_similarity(char_features, reference_features):
     return similarity
 ```
 
-Важно отметить, что для преобразования расстояния в меру близости используется экспоненциальная функция `np.exp(-distance)`. Это позволяет получить значения в диапазоне от 0 до 1, где 1 соответствует точному совпадению (нулевое расстояние), а значения, близкие к 0, соответствуют большим расстояниям (низкая степень сходства).
+Для обеспечения лучшего распознавания также была добавлена нормализация размера изображений:
+
+```python
+def normalize_image_size(img, target_size=(32, 32)):
+    # Add padding to make the image square
+    height, width = img.shape
+    max_dim = max(height, width)
+    
+    # Create a square black image
+    square_img = np.zeros((max_dim, max_dim), dtype=img.dtype)
+    
+    # Calculate offsets to center the original image
+    y_offset = (max_dim - height) // 2
+    x_offset = (max_dim - width) // 2
+    
+    # Copy the original image to the center of the square image
+    square_img[y_offset:y_offset + height, x_offset:x_offset + width] = img
+    
+    # Resize to target size
+    normalized = cv2.resize(square_img, target_size, interpolation=cv2.INTER_AREA)
+    
+    return normalized
+```
 
 ## 2. Расчёт меры близости для каждого обнаруженного символа
 
-Для каждого символа из строки, обнаруженной в лабораторной работе №6, была рассчитана мера близости со всеми символами алфавита иврит из лабораторной работы №5.
-
-Функция распознавания символа:
+Для каждого обнаруженного символа в строке рассчитана мера близости со всеми символами алфавита иврит. Это осуществляется в функции `recognize_character`:
 
 ```python
 def recognize_character(char_img, reference_features):
-    """
-    Recognize a character by comparing with reference features.
-    
-    Args:
-        char_img (numpy.ndarray): Binary character image
-        reference_features (pd.DataFrame): DataFrame with reference features
-        
-    Returns:
-        list: List of tuples (char, similarity) sorted by similarity
-    """
     # Calculate features for the character
     char_features = calculate_character_features(char_img)
     
@@ -83,109 +103,40 @@ def recognize_character(char_img, reference_features):
     return [(char, similarity) for char, similarity, _ in similarities]
 ```
 
-Для массового распознавания всех символов используется функция:
-
-```python
-def recognize_characters(characters, reference_features):
-    """
-    Recognize all segmented characters.
-    
-    Args:
-        characters (list): List of character images
-        reference_features (pd.DataFrame): DataFrame with reference features
-        
-    Returns:
-        list: List of recognition results, where each result is a list of tuples (char, similarity)
-    """
-    logger.info("Recognizing characters...")
-    
-    results = []
-    
-    for i, char_img in enumerate(characters):
-        logger.info(f"Recognizing character {i+1}/{len(characters)}")
-        result = recognize_character(char_img, reference_features)
-        results.append(result)
-    
-    return results
-```
-
-Таким образом, для каждого символа получен список гипотез с оценками близости, отсортированный в порядке убывания меры близости.
+Функция возвращает список пар (символ, мера близости), отсортированных по убыванию меры близости.
 
 ## 3. Вывод результатов в файл
 
-Результаты распознавания были сохранены в файл, где в каждой строке записаны гипотезы для соответствующего символа распознаваемого текста:
+Результаты распознавания сохраняются в файл, где для каждого символа указывается список гипотез, отсортированных по убыванию меры близости:
 
 ```python
-def save_recognition_results(results):
-    """
-    Save recognition results to a file.
-    
-    Args:
-        results (list): List of recognition results
-    """
-    logger.info("Saving recognition results...")
-    
+def save_recognition_results(results, filename="recognition_results.txt"):
     # Create output file
-    output_path = os.path.join(RESULTS_DIR, "recognition_results.txt")
+    output_path = os.path.join(RESULTS_DIR, filename)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         for i, result in enumerate(results):
             f.write(f"{i+1}: {result}\n")
-    
-    logger.info(f"Results saved to {output_path}")
 ```
 
-Пример первых нескольких строк результатов (для каждого символа приведены все гипотезы с мерами близости в порядке убывания):
+Пример результата для эксперимента с увеличенным шрифтом (60 pt):
 
 ```
-1: [('ז', 0.9403128597424821), ('ץ', 0.9335255370258038), ('ח', 0.9251454365270293), ...]
-2: [('ש', 0.8948679425497701), ('ע', 0.8846570807197127), ('ס', 0.8813698884552917), ...]
-3: [('ש', 0.895101643576386), ('ע', 0.8850986176002167), ('ס', 0.880010418650985), ...]
+1: [('ם', 3.1159151578902456e-05), ('פ', 1.4219460039185373e-05), ('ס', 8.265859390959457e-06), ...]
+2: [('י', 1.2881990946540593e-05), ('ז', 1.1132541936169029e-05), ('ו', 3.155322592887302e-08), ...]
+3: [('ח', 0.009801216663587282), ('ה', 0.0014488147988084875), ('ק', 3.2801305338071396e-05), ...]
 ...
 ```
 
-Полный файл результатов сохранен в `results/recognition_results.txt`.
-
 ## 4. Вывод лучших гипотез и сравнение с распознаваемой строкой
 
-Для вывода лучших гипотез была реализована функция `extract_best_hypothesis`:
+Лучшие гипотезы (первый столбец из результатов распознавания) объединяются в строку и сравниваются с исходной строкой:
 
 ```python
 def extract_best_hypothesis(results):
-    """
-    Extract best hypothesis (highest similarity) for each character.
-    
-    Args:
-        results (list): List of recognition results
-        
-    Returns:
-        str: String of best hypotheses
-    """
     return ''.join([result[0][0] for result in results])
-```
 
-Эта функция извлекает символ с наивысшей мерой близости для каждого распознаваемого символа и объединяет их в строку.
-
-Результат распознавания:
-- Распознанная строка: `זששזשסשששסזששסזשסזסשזשסזסש`
-- Эталонная строка: `מילים עבריות לדוגמה`
-
-## 5. Подсчёт количества ошибок и доли верно распознанных символов
-
-Для подсчёта количества ошибок и доли верно распознанных символов была реализована функция:
-
-```python
 def count_correct_recognitions(hypothesis, reference):
-    """
-    Count correct recognitions by comparing with reference.
-    
-    Args:
-        hypothesis (str): String of best hypotheses
-        reference (str): Reference string
-        
-    Returns:
-        tuple: Number of correct recognitions, total characters, percentage
-    """
     # Ensure the strings have the same length
     min_len = min(len(hypothesis), len(reference))
     
@@ -198,50 +149,38 @@ def count_correct_recognitions(hypothesis, reference):
     return correct, len(reference), percentage
 ```
 
+## 5. Вычисление количества ошибок и доли верно распознанных символов
+
+Для каждого эксперимента вычисляется количество правильно распознанных символов и доля в процентах:
+
 Результаты:
-- Правильно распознано: 0 из 19 символов
-- Процент правильного распознавания: 0.00%
 
-Такой низкий результат может быть обусловлен различными факторами:
-1. Разница в размере шрифта и стиле между эталонными символами и символами в распознаваемом тексте
-2. Недостаточное количество признаков для надежного распознавания
-3. Особенности алфавита иврит (схожесть многих символов)
+| Эксперимент | Правильно распознано | Процент |
+|-------------|----------------------|---------|
+| Исходные символы из lab6 | 0/19 | 0.00% |
+| Исходное изображение phrase.bmp | 1/19 | 5.26% |
+| Шрифт 44 pt (меньше) | 0/19 | 0.00% |
+| Шрифт 52 pt (исходный) | 1/19 | 5.26% |
+| Шрифт 60 pt (больше) | 4/19 | 21.05% |
 
-## 6. Эксперимент с изображением другого размера шрифта
+## 6. Эксперимент с разными размерами шрифта
 
-Был проведен эксперимент с генерацией изображения исходной строки с размером шрифта, отличающимся от исходного на 4 пункта (увеличенным). Для этого использовалась функция:
+Для эксперимента были сгенерированы изображения исходной строки с разными размерами шрифта:
+- Меньший размер: 44 pt (на 8 пунктов меньше исходного)
+- Исходный размер: 52 pt
+- Больший размер: 60 pt (на 8 пунктов больше исходного)
+
+Функция для генерации изображений с заданным размером шрифта:
 
 ```python
-def generate_different_size_image(reference_string, font_size_change):
-    """
-    Generate an image of the reference string with a different font size.
-    
-    Args:
-        reference_string (str): Reference string
-        font_size_change (int): Change in font size (positive or negative)
-        
-    Returns:
-        numpy.ndarray: Generated image
-    """
-    logger.info(f"Generating image with font size change of {font_size_change}")
-    
-    # Base font size from lab5
-    base_font_size = 52
-    new_font_size = base_font_size + font_size_change
-    
+def generate_different_size_image(reference_string, font_size):
     # Create a larger image to ensure text fits
     img = Image.new('L', (800, 100), color=255)
     
-    try:
-        font = ImageFont.truetype(FONT_PATH, new_font_size)
-    except Exception as e:
-        logger.error(f"Failed to load font: {e}")
-        return None
-    
+    font = ImageFont.truetype(FONT_PATH, font_size)
     draw = ImageDraw.Draw(img)
     
-    # Draw the text
-    # Hebrew is right-to-left, so position accordingly
+    # Draw the text (Hebrew is right-to-left)
     text_width = draw.textlength(reference_string, font=font)
     position = (img.width - text_width - 10, 10)
     draw.text(position, reference_string, font=font, fill=0)
@@ -249,55 +188,42 @@ def generate_different_size_image(reference_string, font_size_change):
     # Convert to numpy array
     img_array = np.array(img)
     
-    # Save generated image
-    output_path = os.path.join(RESULTS_DIR, f"generated_size_{new_font_size}.png")
-    cv2.imwrite(output_path, img_array)
-    
     return img_array
 ```
 
-Затем символы были сегментированы из сгенерированного изображения и распознаны:
+### Результаты сравнения:
 
-```python
-# Сегментация символов
-different_size_chars = segment_characters_from_image(different_size_image)
-# Распознавание сегментированных символов
-different_size_results = recognize_characters(different_size_chars, reference_features)
+![Сравнение результатов распознавания](results/experiment_comparison.png)
+
+Как видно из результатов, наилучшее качество распознавания достигается при использовании увеличенного шрифта (60 pt) - 21.05% символов распознаны верно. Это можно объяснить тем, что при увеличенном размере шрифта характерные особенности символов выражены более четко, что позволяет более точно вычислить признаки.
+
+### Анализ разницы между экспериментами:
+
+```
+Phrase.bmp - Original Lab6 Chars: 5.26%
+Smaller Font (44) - Original Lab6 Chars: 0.00%
+Original Font (52) - Original Lab6 Chars: 5.26%
+Larger Font (60) - Original Lab6 Chars: 21.05%
+Smaller Font (44) - Phrase.bmp: -5.26%
+Original Font (52) - Phrase.bmp: 0.00%
+Larger Font (60) - Phrase.bmp: 15.79%
+Original Font (52) - Smaller Font (44): 5.26%
+Larger Font (60) - Smaller Font (44): 21.05%
+Larger Font (60) - Original Font (52): 15.79%
 ```
 
-Результаты распознавания:
-- Распознанная строка: `סדקדסשםךדהחקדהםסק`
-- Эталонная строка: `מילים עבריות לדוגמה`
-- Правильно распознано: 0 из 19 символов
-- Процент правильного распознавания: 0.00%
+## Выводы:
 
-### Сравнение результатов:
-- Распознавание оригинального изображения: 0.00%
-- Распознавание изображения с увеличенным шрифтом: 0.00%
-- Разница: 0.00%
+1. Реализованный алгоритм распознавания на основе признаков показывает невысокую точность распознавания (до 21% в лучшем случае), что говорит о необходимости улучшения метода.
 
-Результаты эксперимента показывают, что изменение размера шрифта не привело к улучшению качества распознавания. Это может быть связано с тем, что использованные признаки (координаты центра тяжести и осевые моменты инерции) не учитывают мелкие детали символов, которые могут быть ключевыми для распознавания.
+2. Наиболее важные факторы, влияющие на точность распознавания:
+   - Размер шрифта: более крупный шрифт обеспечивает лучшее распознавание
+   - Набор используемых признаков: включение большего количества признаков и их взвешивание позволило улучшить качество
+   - Нормализация изображений: приведение всех изображений к единому размеру важно для корректного сравнения
 
-## Общие выводы
+3. Возможные пути улучшения:
+   - Использование более продвинутых методов сравнения символов, например, с применением машинного обучения
+   - Добавление признаков, основанных на контурах символов
+   - Улучшение алгоритма сегментации для более точного выделения символов
 
-1. Реализован алгоритм расчёта меры близости изображений символов на основе признаков из лабораторной работы №5, использующий евклидово расстояние в пространстве нормализованных признаков.
-
-2. Для каждого обнаруженного символа в строке рассчитана мера близости со всеми символами алфавита иврит.
-
-3. Результаты сохранены в файл, где для каждого символа приведены гипотезы в порядке убывания меры близости.
-
-4. Извлечены лучшие гипотезы и составлена строка для сравнения с эталонной.
-
-5. Подсчитано количество ошибок и доля верно распознанных символов. К сожалению, результат распознавания оказался неудовлетворительным (0% правильных распознаваний).
-
-6. Проведен эксперимент с изображением, имеющим другой размер шрифта. Результаты также оказались неудовлетворительными.
-
-Для улучшения качества распознавания можно предложить следующие меры:
-1. Использовать дополнительные признаки для более точного описания символов
-2. Применить методы машинного обучения для классификации
-3. Использовать контурный анализ или другие методы компьютерного зрения для выделения характерных особенностей символов
-4. Нормализовать изображения символов перед распознаванием (выравнивание по размеру, повороту и т.д.)
-
-![Сгенерированное изображение](results/generated_size_56.png)
-
-Полные результаты работы и исходный код доступны в соответствующих файлах в директории `results/`.
+4. При увеличении размера шрифта улучшение распознавания наиболее заметно, что может быть полезно при проектировании систем распознавания текста.

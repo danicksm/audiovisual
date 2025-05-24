@@ -1,0 +1,3 @@
+Reference string: אבגדהוזחטיכלמנסעפצקרשת
+Recognized string: יפותהעיהויהושררישררהעיגייא
+Correct recognitions: 2/22 (9.09%)
