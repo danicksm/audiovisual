@@ -6,6 +6,7 @@ Smaller Font (44): 22.73%
 Original Font (52): 27.27%
 Larger Font (60): 27.27%
 Very Large Font (72): 36.36%
+Alt Font DejaVuSans: 18.18%
 
 Differences between experiments:
 
@@ -14,13 +15,19 @@ Smaller Font (44) - Original Lab6 Chars: 18.18%
 Original Font (52) - Original Lab6 Chars: 22.73%
 Larger Font (60) - Original Lab6 Chars: 22.73%
 Very Large Font (72) - Original Lab6 Chars: 31.82%
+Alt Font DejaVuSans - Original Lab6 Chars: 13.64%
 Smaller Font (44) - Phrase.bmp: 13.64%
 Original Font (52) - Phrase.bmp: 18.18%
 Larger Font (60) - Phrase.bmp: 18.18%
 Very Large Font (72) - Phrase.bmp: 27.27%
+Alt Font DejaVuSans - Phrase.bmp: 9.09%
 Original Font (52) - Smaller Font (44): 4.55%
 Larger Font (60) - Smaller Font (44): 4.55%
 Very Large Font (72) - Smaller Font (44): 13.64%
+Alt Font DejaVuSans - Smaller Font (44): -4.55%
 Larger Font (60) - Original Font (52): 0.00%
 Very Large Font (72) - Original Font (52): 9.09%
+Alt Font DejaVuSans - Original Font (52): -9.09%
 Very Large Font (72) - Larger Font (60): 9.09%
+Alt Font DejaVuSans - Larger Font (60): -9.09%
+Alt Font DejaVuSans - Very Large Font (72): -18.18%

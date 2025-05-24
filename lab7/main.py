@@ -10,6 +10,7 @@ import pickle
 import shutil
 from PIL import Image, ImageDraw, ImageFont
 import seaborn as sns
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,6 +24,13 @@ FEATURES_CSV = os.path.join(LAB5_DIR, "results", "features.csv")
 PHRASE_BMP = os.path.join(LAB6_DIR, "phrase.bmp")
 LAB6_CHARACTERS_DIR = os.path.join(LAB6_DIR, "results")
 FONT_PATH = os.path.join(LAB5_DIR, "Hebrew.ttf")
+
+# Additional font paths - можно использовать различные шрифты для генерации эталонов
+ADDITIONAL_FONTS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf"
+]
 
 # New reference string with symbols from lab5
 # Составляем фразу из всех доступных символов иврита (для лучшего распознавания)
@@ -180,6 +188,27 @@ def calculate_character_features(char_img):
     norm_x_profile = x_profile / height if np.max(x_profile) > 0 else x_profile
     norm_y_profile = y_profile / width if np.max(y_profile) > 0 else y_profile
     
+    # Calculate additional zoning features (разделение на большее количество зон)
+    h_third = height // 3
+    w_third = width // 3
+    
+    # 9 zones (3x3 grid)
+    zones = [
+        char_img[0:h_third, 0:w_third],                # Top-left
+        char_img[0:h_third, w_third:2*w_third],       # Top-center
+        char_img[0:h_third, 2*w_third:width],         # Top-right
+        char_img[h_third:2*h_third, 0:w_third],       # Middle-left
+        char_img[h_third:2*h_third, w_third:2*w_third], # Middle-center
+        char_img[h_third:2*h_third, 2*w_third:width], # Middle-right
+        char_img[2*h_third:height, 0:w_third],        # Bottom-left
+        char_img[2*h_third:height, w_third:2*w_third], # Bottom-center
+        char_img[2*h_third:height, 2*w_third:width]   # Bottom-right
+    ]
+    
+    zone_weights = [np.sum(zone) for zone in zones]
+    zone_areas = [zone.size for zone in zones]
+    zone_specific_weights = [zone_weights[i] / zone_areas[i] if zone_areas[i] > 0 else 0 for i in range(len(zones))]
+    
     # Return dictionary of features
     return {
         'TotalWeight': total_weight,
@@ -200,7 +229,25 @@ def calculate_character_features(char_img):
         'NormMomentOfInertia_X': norm_moment_x,
         'NormMomentOfInertia_Y': norm_moment_y,
         'XProfile': norm_x_profile,
-        'YProfile': norm_y_profile
+        'YProfile': norm_y_profile,
+        'ZoneWeight_1': zone_weights[0],
+        'ZoneWeight_2': zone_weights[1],
+        'ZoneWeight_3': zone_weights[2],
+        'ZoneWeight_4': zone_weights[3],
+        'ZoneWeight_5': zone_weights[4],
+        'ZoneWeight_6': zone_weights[5],
+        'ZoneWeight_7': zone_weights[6],
+        'ZoneWeight_8': zone_weights[7],
+        'ZoneWeight_9': zone_weights[8],
+        'ZoneSpecificWeight_1': zone_specific_weights[0],
+        'ZoneSpecificWeight_2': zone_specific_weights[1],
+        'ZoneSpecificWeight_3': zone_specific_weights[2],
+        'ZoneSpecificWeight_4': zone_specific_weights[3],
+        'ZoneSpecificWeight_5': zone_specific_weights[4],
+        'ZoneSpecificWeight_6': zone_specific_weights[5],
+        'ZoneSpecificWeight_7': zone_specific_weights[6],
+        'ZoneSpecificWeight_8': zone_specific_weights[7],
+        'ZoneSpecificWeight_9': zone_specific_weights[8]
     }
 
 def compute_distance(char_features, reference_features):
@@ -219,19 +266,27 @@ def compute_distance(char_features, reference_features):
         'Weight_Q1', 'Weight_Q2', 'Weight_Q3', 'Weight_Q4',  # Масса символа по четвертям
         'SpecificWeight_Q1', 'SpecificWeight_Q2', 'SpecificWeight_Q3', 'SpecificWeight_Q4',
         'NormCoG_X', 'NormCoG_Y',  # Нормализованные координаты центра тяжести
-        'NormMomentOfInertia_X', 'NormMomentOfInertia_Y'  # Нормализованные осевые моменты инерции
+        'NormMomentOfInertia_X', 'NormMomentOfInertia_Y',  # Нормализованные осевые моменты инерции
+        'ZoneSpecificWeight_1', 'ZoneSpecificWeight_2', 'ZoneSpecificWeight_3',  # Дополнительные зонные признаки
+        'ZoneSpecificWeight_4', 'ZoneSpecificWeight_5', 'ZoneSpecificWeight_6',
+        'ZoneSpecificWeight_7', 'ZoneSpecificWeight_8', 'ZoneSpecificWeight_9'
     ]
     
-    # Define weights for each feature
+    # Define weights for each feature - оптимизированные веса для разных признаков
     weights = {
-        'Weight_Q1': 0.1, 'Weight_Q2': 0.1, 'Weight_Q3': 0.1, 'Weight_Q4': 0.1,
-        'SpecificWeight_Q1': 0.05, 'SpecificWeight_Q2': 0.05, 'SpecificWeight_Q3': 0.05, 'SpecificWeight_Q4': 0.05,
-        'NormCoG_X': 0.15, 'NormCoG_Y': 0.15,
-        'NormMomentOfInertia_X': 0.15, 'NormMomentOfInertia_Y': 0.15
+        'Weight_Q1': 0.08, 'Weight_Q2': 0.08, 'Weight_Q3': 0.08, 'Weight_Q4': 0.08,
+        'SpecificWeight_Q1': 0.04, 'SpecificWeight_Q2': 0.04, 'SpecificWeight_Q3': 0.04, 'SpecificWeight_Q4': 0.04,
+        'NormCoG_X': 0.1, 'NormCoG_Y': 0.1,
+        'NormMomentOfInertia_X': 0.1, 'NormMomentOfInertia_Y': 0.1,
+        'ZoneSpecificWeight_1': 0.02, 'ZoneSpecificWeight_2': 0.02, 'ZoneSpecificWeight_3': 0.02,
+        'ZoneSpecificWeight_4': 0.02, 'ZoneSpecificWeight_5': 0.02, 'ZoneSpecificWeight_6': 0.02,
+        'ZoneSpecificWeight_7': 0.02, 'ZoneSpecificWeight_8': 0.02, 'ZoneSpecificWeight_9': 0.02
     }
     
     # Calculate weighted squared differences for scalar features
     weighted_squared_diff = 0
+    total_weight_used = 0
+    
     for key in scalar_feature_keys:
         # Skip if key is missing in either features dictionary
         if key not in char_features or key not in reference_features:
@@ -242,10 +297,84 @@ def compute_distance(char_features, reference_features):
         ref_value = float(reference_features[key])
         
         # Add weighted squared difference
-        weighted_squared_diff += weights[key] * (char_value - ref_value)**2
+        weight = weights.get(key, 0.05)  # Default weight if not specified
+        weighted_squared_diff += weight * (char_value - ref_value)**2
+        total_weight_used += weight
     
     # Calculate weighted Euclidean distance
     distance = np.sqrt(weighted_squared_diff)
+    
+    # Add profile comparison using cosine similarity if available
+    if 'XProfile' in char_features and 'XProfile' in reference_features and \
+       'YProfile' in char_features and 'YProfile' in reference_features:
+        # For X profile
+        char_x_profile = char_features['XProfile']
+        ref_x_profile = reference_features['XProfile']
+        
+        if not isinstance(char_x_profile, np.ndarray):
+            if isinstance(char_x_profile, str):
+                char_x_profile = np.fromstring(char_x_profile.strip('[]'), sep=' ')
+            else:
+                char_x_profile = np.array([char_x_profile])
+        
+        if not isinstance(ref_x_profile, np.ndarray):
+            if isinstance(ref_x_profile, str):
+                ref_x_profile = np.fromstring(ref_x_profile.strip('[]'), sep=' ')
+            else:
+                ref_x_profile = np.array([ref_x_profile])
+        
+        # Resize profiles to match lengths
+        max_len = max(len(char_x_profile), len(ref_x_profile))
+        char_x_profile_resized = np.interp(np.linspace(0, 1, max_len), 
+                                         np.linspace(0, 1, len(char_x_profile)), 
+                                         char_x_profile)
+        ref_x_profile_resized = np.interp(np.linspace(0, 1, max_len), 
+                                        np.linspace(0, 1, len(ref_x_profile)), 
+                                        ref_x_profile)
+        
+        # Compute cosine similarity for X profile
+        x_profile_sim = 0
+        if np.any(char_x_profile_resized) and np.any(ref_x_profile_resized):
+            x_profile_sim = np.dot(char_x_profile_resized, ref_x_profile_resized) / \
+                          (np.linalg.norm(char_x_profile_resized) * np.linalg.norm(ref_x_profile_resized))
+        
+        # For Y profile
+        char_y_profile = char_features['YProfile']
+        ref_y_profile = reference_features['YProfile']
+        
+        if not isinstance(char_y_profile, np.ndarray):
+            if isinstance(char_y_profile, str):
+                char_y_profile = np.fromstring(char_y_profile.strip('[]'), sep=' ')
+            else:
+                char_y_profile = np.array([char_y_profile])
+        
+        if not isinstance(ref_y_profile, np.ndarray):
+            if isinstance(ref_y_profile, str):
+                ref_y_profile = np.fromstring(ref_y_profile.strip('[]'), sep=' ')
+            else:
+                ref_y_profile = np.array([ref_y_profile])
+        
+        # Resize profiles to match lengths
+        max_len = max(len(char_y_profile), len(ref_y_profile))
+        char_y_profile_resized = np.interp(np.linspace(0, 1, max_len), 
+                                         np.linspace(0, 1, len(char_y_profile)), 
+                                         char_y_profile)
+        ref_y_profile_resized = np.interp(np.linspace(0, 1, max_len), 
+                                        np.linspace(0, 1, len(ref_y_profile)), 
+                                        ref_y_profile)
+        
+        # Compute cosine similarity for Y profile
+        y_profile_sim = 0
+        if np.any(char_y_profile_resized) and np.any(ref_y_profile_resized):
+            y_profile_sim = np.dot(char_y_profile_resized, ref_y_profile_resized) / \
+                          (np.linalg.norm(char_y_profile_resized) * np.linalg.norm(ref_y_profile_resized))
+        
+        # Adjust distance based on profile similarities
+        profile_weight = 0.3  # Weight for profile comparison
+        profile_sim = (x_profile_sim + y_profile_sim) / 2  # Average similarity
+        
+        # Combine with Euclidean distance (lower distance for higher similarity)
+        distance = distance * (1 - profile_weight) + (1 - profile_sim) * profile_weight
     
     return distance
 
@@ -264,8 +393,8 @@ def compute_similarity(char_features, reference_features):
     distance = compute_distance(char_features, reference_features)
     
     # Convert distance to similarity (1 for exact match, decreasing for less similar)
-    # Using exponential decay to ensure positive values
-    similarity = np.exp(-distance)
+    # Using exponential decay to ensure positive values, with adjusted steepness
+    similarity = np.exp(-1.5 * distance)  # Увеличенный коэффициент для лучшего разделения
     
     return similarity
 
@@ -373,13 +502,14 @@ def count_correct_recognitions(hypothesis, reference):
     
     return correct, len(reference), percentage
 
-def generate_different_size_image(reference_string, font_size):
+def generate_different_size_image(reference_string, font_size, font_path=None):
     """
     Generate an image of the reference string with the specified font size.
     
     Args:
         reference_string (str): Reference string
         font_size (int): Font size to use
+        font_path (str, optional): Path to font file to use
         
     Returns:
         numpy.ndarray: Generated image
@@ -390,9 +520,11 @@ def generate_different_size_image(reference_string, font_size):
     img = Image.new('L', (1200, 100), color=255)
     
     try:
-        font = ImageFont.truetype(FONT_PATH, font_size)
+        # Use provided font path or default
+        font_file = font_path if font_path else FONT_PATH
+        font = ImageFont.truetype(font_file, font_size)
     except Exception as e:
-        logger.error(f"Failed to load font: {e}")
+        logger.error(f"Failed to load font {font_file}: {e}")
         return None
     
     draw = ImageDraw.Draw(img)
@@ -407,7 +539,8 @@ def generate_different_size_image(reference_string, font_size):
     img_array = np.array(img)
     
     # Save generated image
-    output_path = os.path.join(RESULTS_DIR, f"generated_size_{font_size}.png")
+    font_name = os.path.basename(font_file).split('.')[0] if font_path else "default"
+    output_path = os.path.join(RESULTS_DIR, f"generated_{font_name}_size_{font_size}.png")
     cv2.imwrite(output_path, img_array)
     
     return img_array
@@ -835,6 +968,23 @@ def main():
         )
         save_experiment_results("very_large_font_accuracy", very_large_hypothesis, very_large_accuracy, very_large_font_size)
         experiments[f"Very Large Font ({very_large_font_size})"] = very_large_accuracy
+    
+    # Новые эксперименты с дополнительными шрифтами
+    for i, font_path in enumerate(ADDITIONAL_FONTS):
+        try:
+            font_name = os.path.basename(font_path).split('.')[0]
+            logger.info(f"Experiment {7+i}: Recognizing text with alternative font {font_name}")
+            
+            # Generate images with alternative fonts
+            alt_image = generate_different_size_image(REFERENCE_STRING, base_font_size, font_path)
+            if alt_image is not None:
+                alt_results, alt_hypothesis, alt_accuracy = run_recognition_experiment(
+                    reference_features, alt_image, base_font_size, f"alt_font_{font_name}"
+                )
+                save_experiment_results(f"alt_font_{font_name}_accuracy", alt_hypothesis, alt_accuracy, base_font_size)
+                experiments[f"Alt Font {font_name}"] = alt_accuracy
+        except Exception as e:
+            logger.error(f"Failed to use font {font_path}: {e}")
     
     # Compare and visualize experiment results
     compare_experiments(experiments)
