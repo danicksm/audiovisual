@@ -15,9 +15,10 @@ if not os.path.exists('results'):
 # List of audio files to analyze
 audio_files = ['aaa.wav', 'iii.wav', 'gaf.wav']
 labels = ["'А'", "'И'", "Имитация животного"]
+file_prefixes = ["AAA", "III", "GAF"]
 
 # Function to analyze voice files
-def analyze_voice(file_path, label, file_number):
+def analyze_voice(file_path, label, file_number, file_prefix):
     print(f"Processing {file_path}...")
     
     # Load audio file
@@ -83,6 +84,24 @@ def analyze_voice(file_path, label, file_number):
     print(f"Minimum voice frequency: {min_freq:.2f} Hz")
     print(f"Maximum voice frequency: {max_freq:.2f} Hz")
     
+    # Plot min/max frequency graph (Task 3)
+    plt.figure(figsize=(12, 6))
+    # Get average spectrum across all time frames
+    avg_spectrum = np.mean(S, axis=1)
+    plt.plot(frequencies, avg_spectrum, 'b-')
+    plt.axvline(x=min_freq, color='g', linestyle='--', label=f'Мин: {min_freq:.1f} Гц')
+    plt.axvline(x=max_freq, color='r', linestyle='--', label=f'Макс: {max_freq:.1f} Гц')
+    plt.xscale('linear')
+    plt.xlim(0, sr/2)  # Show full frequency range
+    plt.xlabel('Частота [Гц]')
+    plt.ylabel('Амплитуда')
+    plt.title(f'Задание 3: Частоты сигнала {file_prefix}')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'results/3_{file_prefix}_min_max_freq.png')
+    plt.close()
+    
     # 4. Find the most timbrally colored fundamental tone (with the most overtones)
     
     # Use harmonic-percussive source separation to enhance harmonic content
@@ -94,6 +113,7 @@ def analyze_voice(file_path, label, file_number):
     # For each time frame, count overtones above significant threshold
     overtone_counts = []
     fundamental_tones = []
+    overtone_energies = []
     
     # For each time frame
     for t in range(pitches.shape[1]):
@@ -104,13 +124,20 @@ def analyze_voice(file_path, label, file_number):
             
             # Count frames with significant harmonic content
             harmonic_count = 0
+            current_overtones = []
             
             # Check for overtones (integer multiples of f0)
-            for n in range(2, 10):  # Check up to 9th harmonic
+            for n in range(1, 10):  # Check fundamental and up to 9th harmonic
                 target_freq = f0 * n
                 
                 # Find the closest frequency bin
                 closest_idx = np.argmin(np.abs(frequencies - target_freq))
+                
+                # Get energy at this frequency
+                energy = S[closest_idx, t] if closest_idx < len(frequencies) else 0
+                
+                # Store overtone information (harmonic number, frequency, energy)
+                current_overtones.append((n, target_freq, energy))
                 
                 # Check if there's significant energy at this harmonic
                 if closest_idx < len(frequencies) and S[closest_idx, t] > threshold:
@@ -118,13 +145,38 @@ def analyze_voice(file_path, label, file_number):
             
             overtone_counts.append(harmonic_count)
             fundamental_tones.append(f0)
+            overtone_energies.append(current_overtones)
     
     # Find the fundamental tone with the most overtones
     if overtone_counts:
         max_overtones_idx = np.argmax(overtone_counts)
         best_f0 = fundamental_tones[max_overtones_idx]
         overtone_count = overtone_counts[max_overtones_idx]
+        best_overtones = overtone_energies[max_overtones_idx]
+        
         print(f"Most timbrally colored fundamental tone: {best_f0:.2f} Hz (with {overtone_count} significant overtones)")
+        
+        # Plot overtones graph (Task 4)
+        plt.figure(figsize=(12, 6))
+        harmonic_numbers = [o[0] for o in best_overtones]
+        harmonic_freqs = [o[1] for o in best_overtones]
+        harmonic_energies = [o[2] for o in best_overtones]
+        
+        plt.bar(harmonic_numbers, harmonic_energies, width=0.5, alpha=0.7)
+        plt.xlabel('Номер гармоники')
+        plt.ylabel('Энергия')
+        plt.title(f'Задание 4: Обертоны сигнала {file_prefix}\nОсновной тон: {best_f0:.2f} Гц')
+        plt.grid(True, axis='y')
+        plt.xticks(harmonic_numbers)
+        
+        # Add frequency labels above bars
+        for i, (num, freq, energy) in enumerate(best_overtones):
+            plt.text(num, energy + max(harmonic_energies)*0.02, f'{freq:.1f} Гц', 
+                    ha='center', va='bottom', rotation=45, fontsize=8)
+        
+        plt.tight_layout()
+        plt.savefig(f'results/4_{file_prefix}_harmonics.png')
+        plt.close()
     else:
         best_f0 = 0
         print("No significant fundamental tones detected")
@@ -138,6 +190,7 @@ def analyze_voice(file_path, label, file_number):
     
     # Collect formants for all frames
     all_formants = []
+    all_formant_freqs = []  # To calculate average
     
     # For each time frame with step of 0.1s
     for t in range(0, S.shape[1], frame_step):
@@ -149,7 +202,7 @@ def analyze_voice(file_path, label, file_number):
         
         # Find peaks (formants)
         # Use a relatively small distance to get finer frequency resolution
-        # distance≈50Hz in frequency bins
+        # distance≈45Hz in frequency bins
         min_distance = int(45 / (sr / n_fft))  # ~45 Hz in bin indices
         peaks, _ = signal.find_peaks(spectrum, distance=min_distance)
         
@@ -163,50 +216,115 @@ def analyze_voice(file_path, label, file_number):
             peak_freqs = peak_freqs[top_indices]
             peak_amps = peak_amps[top_indices]
         
-        # Sort by frequency
-        sort_idx = np.argsort(peak_freqs)
-        peak_freqs = peak_freqs[sort_idx]
-        peak_amps = peak_amps[sort_idx]
+        # Sort by amplitude (descending) to get strongest formants
+        sorted_indices = np.argsort(peak_amps)[::-1]
+        peak_freqs = peak_freqs[sorted_indices]
+        peak_amps = peak_amps[sorted_indices]
         
         # Store time and formant data
         time_sec = t * hop_length / sr
         all_formants.append((time_sec, peak_freqs, peak_amps))
+        
+        # Store formant frequencies for averaging
+        all_formant_freqs.extend(peak_freqs[:3] if len(peak_freqs) >= 3 else peak_freqs)
     
-    # Create a plot showing formants over time
+    # Calculate average formant frequency
+    avg_formant = np.mean(all_formant_freqs) if all_formant_freqs else 0
+    
+    # Create arrays to store specific formant data for plotting
+    formant_times = []
+    formant1_freqs = []
+    formant2_freqs = []
+    formant3_freqs = []
+    
+    # Extract specific formant data from all_formants
+    for time_sec, peak_freqs, peak_amps in all_formants:
+        formant_times.append(time_sec)
+        
+        # First formant (if available)
+        if len(peak_freqs) > 0:
+            formant1_freqs.append(peak_freqs[0])
+        else:
+            formant1_freqs.append(np.nan)
+            
+        # Second formant (if available)
+        if len(peak_freqs) > 1:
+            formant2_freqs.append(peak_freqs[1])
+        else:
+            formant2_freqs.append(np.nan)
+            
+        # Third formant (if available)
+        if len(peak_freqs) > 2:
+            formant3_freqs.append(peak_freqs[2])
+        else:
+            formant3_freqs.append(np.nan)
+    
+    # Plot formants with average value (Task 5)
     plt.figure(figsize=(12, 6))
     
-    # Plot the spectrogram as background
+    # Plot each formant track
+    plt.plot(formant_times, formant1_freqs, 'b-', label='Форманта 1')
+    plt.plot(formant_times, formant2_freqs, 'orange', label='Форманта 2')
+    plt.plot(formant_times, formant3_freqs, 'g-', label='Форманта 3')
+    
+    # Add horizontal line for average
+    plt.axhline(y=avg_formant, color='k', linestyle='--', 
+               label=f'Общее среднее: {avg_formant:.1f} Гц')
+    
+    plt.xlabel('Время [с]')
+    plt.ylabel('Частота [Гц]')
+    plt.title(f'Задание 5: Форманты сигнала {file_prefix}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f'results/5_{file_prefix}_formants.png')
+    plt.close()
+    
+    # Plot summed formants (Task 5.1)
+    plt.figure(figsize=(12, 6))
+    
+    # Sum formant frequencies for each time point
+    summed_formants = []
+    for i, (time_sec, peak_freqs, peak_amps) in enumerate(all_formants):
+        if len(peak_freqs) >= 3:
+            # Sum top 3 formant frequencies
+            formant_sum = formant1_freqs[i] + formant2_freqs[i] + formant3_freqs[i]
+            summed_formants.append((time_sec, formant_sum))
+    
+    # Plot summed formants
+    if summed_formants:
+        times, sums = zip(*summed_formants)
+        avg_sum = np.mean(sums)
+        
+        plt.plot(times, sums, 'b-', label='Сумма 3 формант')
+        plt.axhline(y=avg_sum, color='k', linestyle='--', 
+                   label=f'Среднее: {avg_sum:.1f} Гц')
+        
+        plt.xlabel('Время [с]')
+        plt.ylabel('Суммарная частота [Гц]')
+        plt.title(f'Задание 5.1: Суммарная форманта сигнала {file_prefix}')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f'results/5_1_{file_prefix}_formants_sum.png')
+        plt.close()
+    
+    # Plot the spectrogram as background with formants overlay
+    plt.figure(figsize=(12, 6))
     librosa.display.specshow(S_db, sr=sr, hop_length=hop_length, x_axis='time', 
                             y_axis='log', cmap='gray_r', alpha=0.7)
     
-    # Define colors for the three strongest formants
-    colors = ['red', 'green', 'blue']
-    
-    # Track top 3 formants by frequency
-    formant_tracks = [[] for _ in range(3)]
-    
-    # For each time frame where we computed formants
-    for time_sec, peak_freqs, peak_amps in all_formants:
-        # If we have at least 3 formants in this frame
-        if len(peak_freqs) >= 3:
-            # Sort by amplitude (descending)
-            sorted_indices = np.argsort(peak_amps)[::-1]
-            
-            # Get top 3 peaks by amplitude
-            for i in range(min(3, len(sorted_indices))):
-                idx = sorted_indices[i]
-                freq = peak_freqs[idx]
-                amp = peak_amps[idx]
-                
-                # Store data for this formant track
-                formant_tracks[i].append((time_sec, freq, amp))
-    
     # Plot each formant track with a different color
-    for i, track in enumerate(formant_tracks):
-        if track:  # If we have data for this formant track
-            times, freqs, _ = zip(*track)
-            plt.plot(times, freqs, 'o-', color=colors[i], markersize=4, 
-                    label=f'Формант {i+1}')
+    plt.plot(formant_times, formant1_freqs, 'r-o', markersize=4, label='Формант 1')
+    plt.plot(formant_times, formant2_freqs, 'g-o', markersize=4, label='Формант 2')
+    plt.plot(formant_times, formant3_freqs, 'b-o', markersize=4, label='Формант 3')
+    
+    # Mark specific time points from the table for reference
+    table_times = [3.0, 3.1, 3.2] if file_number == 1 else [4.0] if file_number == 2 else []
+    for t in table_times:
+        plt.axvline(x=t, color='yellow', linestyle='--', linewidth=1)
+        plt.text(t, 100, f"{t} c", color='yellow', ha='center', va='bottom', fontsize=10,
+                bbox=dict(boxstyle="round,pad=0.3", fc='black', alpha=0.7))
     
     plt.colorbar(format='%+2.0f dB')
     plt.title(f'Форманты звука {label}')
@@ -225,26 +343,14 @@ def analyze_voice(file_path, label, file_number):
         f.write("-" * 60 + "\n")
         
         # For each time frame
-        for t_idx, (time_sec, peak_freqs, peak_amps) in enumerate(all_formants):
+        for i, (time_sec, peak_freqs, peak_amps) in enumerate(all_formants):
             # Format the line with formant frequencies
             formant_str = f"{time_sec:.2f} | "
             
-            # Get top 3 formants by amplitude
-            if len(peak_amps) > 0:
-                sorted_indices = np.argsort(peak_amps)[::-1]
-                
-                # Add up to 3 formant frequencies
-                for i in range(3):
-                    if i < len(sorted_indices):
-                        idx = sorted_indices[i]
-                        formant_str += f"{peak_freqs[idx]:.2f} | "
-                    else:
-                        formant_str += "N/A | "
-            else:
-                formant_str += "N/A | N/A | N/A | "
-            
-            # Remove the last separator
-            formant_str = formant_str[:-3]
+            # Add up to 3 formant frequencies
+            formant_str += f"{formant1_freqs[i]:.2f} | " if i < len(formant1_freqs) and not np.isnan(formant1_freqs[i]) else "N/A | "
+            formant_str += f"{formant2_freqs[i]:.2f} | " if i < len(formant2_freqs) and not np.isnan(formant2_freqs[i]) else "N/A | "
+            formant_str += f"{formant3_freqs[i]:.2f}" if i < len(formant3_freqs) and not np.isnan(formant3_freqs[i]) else "N/A"
             
             # Write to file
             f.write(formant_str + "\n")
@@ -257,13 +363,17 @@ def analyze_voice(file_path, label, file_number):
         'sample_rate': sr,
         'min_freq': min_freq,
         'max_freq': max_freq,
-        'best_f0': best_f0
+        'best_f0': best_f0,
+        'avg_formant': avg_formant,
+        'formant1_range': [np.nanmin(formant1_freqs), np.nanmax(formant1_freqs)] if not all(np.isnan(x) for x in formant1_freqs) else [0, 0],
+        'formant2_range': [np.nanmin(formant2_freqs), np.nanmax(formant2_freqs)] if not all(np.isnan(x) for x in formant2_freqs) else [0, 0],
+        'formant3_range': [np.nanmin(formant3_freqs), np.nanmax(formant3_freqs)] if not all(np.isnan(x) for x in formant3_freqs) else [0, 0]
     }
 
 # Analyze each audio file
 results = []
-for i, (audio_file, label) in enumerate(zip(audio_files, labels), 1):
-    result = analyze_voice(audio_file, label, i)
+for i, (audio_file, label, file_prefix) in enumerate(zip(audio_files, labels, file_prefixes), 1):
+    result = analyze_voice(audio_file, label, i, file_prefix)
     results.append(result)
     print("-" * 50)
 
@@ -298,5 +408,13 @@ plt.xticks(x, [r['label'] for r in results])
 plt.tight_layout()
 plt.savefig('results/voice_comparison.png')
 plt.close()
+
+# Print formant ranges for each sound
+for r in results:
+    print(f"Звук {r['label']}:")
+    print(f"Формант 1 диапазон: {r['formant1_range'][0]:.2f}-{r['formant1_range'][1]:.2f} Гц")
+    print(f"Формант 2 диапазон: {r['formant2_range'][0]:.2f}-{r['formant2_range'][1]:.2f} Гц")
+    print(f"Формант 3 диапазон: {r['formant3_range'][0]:.2f}-{r['formant3_range'][1]:.2f} Гц")
+    print("-" * 50)
 
 print("Анализ завершен. Результаты сохранены в папке 'results'.") 
