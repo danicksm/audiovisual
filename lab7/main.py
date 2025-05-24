@@ -1,413 +1,500 @@
 #!/usr/bin/env python3
 import os
-import sys
+import cv2
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-from PIL import Image, ImageDraw, ImageFont
+import pandas as pd
 import logging
-from typing import List, Tuple, Dict
-import math
+from scipy.spatial.distance import euclidean
+import pickle
+import shutil
+from PIL import Image, ImageDraw, ImageFont
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Constants
-FONT_PATH = "../lab5/Hebrew.ttf"
-FEATURES_CSV_PATH = "../lab5/results/features.csv"
-TEST_IMAGE_PATH = "../lab6/phrase.bmp"
-FONT_SIZE = 52
-OUTPUT_DIR_ORIGINALS = "symbols/originals"
+LAB5_DIR = "../lab5"
+LAB6_DIR = "../lab6"
 RESULTS_DIR = "results"
+FEATURES_CSV = os.path.join(LAB5_DIR, "results", "features.csv")
+PHRASE_BMP = os.path.join(LAB6_DIR, "phrase.bmp")
+LAB6_CHARACTERS_DIR = os.path.join(LAB6_DIR, "results")
+FONT_PATH = os.path.join(LAB5_DIR, "Hebrew.ttf")
 
-# Ensure directories exist
-os.makedirs(OUTPUT_DIR_ORIGINALS, exist_ok=True)
+# Ensure results directory exists
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Load features from lab5
-def load_features() -> pd.DataFrame:
-    """Load character features from CSV file generated in lab5."""
-    try:
-        features_df = pd.read_csv(FEATURES_CSV_PATH, sep=';')
-        logger.info(f"Loaded features for {len(features_df)} characters")
-        return features_df
-    except Exception as e:
-        logger.error(f"Failed to load features: {e}")
-        sys.exit(1)
+def load_features():
+    """
+    Load features of reference symbols from lab5.
+    
+    Returns:
+        pd.DataFrame: DataFrame with symbol features
+    """
+    logger.info(f"Loading features from {FEATURES_CSV}")
+    
+    # Load features CSV
+    features_df = pd.read_csv(FEATURES_CSV, sep=';')
+    
+    logger.info(f"Loaded features for {len(features_df)} symbols")
+    return features_df
 
-def load_image(image_path: str) -> np.ndarray:
-    """Load and preprocess an image."""
-    try:
-        img = np.array(Image.open(image_path))
-        logger.info(f"Loaded image with shape {img.shape}")
-        return img
-    except Exception as e:
-        logger.error(f"Failed to load image: {e}")
-        sys.exit(1)
+def load_segmented_characters():
+    """
+    Load segmented characters from lab6.
+    
+    Returns:
+        list: List of character images
+    """
+    logger.info(f"Loading segmented characters from {LAB6_CHARACTERS_DIR}")
+    
+    characters = []
+    char_filenames = []
+    
+    # Find all character files in lab6/results
+    for filename in sorted(os.listdir(LAB6_CHARACTERS_DIR)):
+        if filename.startswith("char_") and filename.endswith(".png") and not "_profiles" in filename:
+            char_filenames.append(filename)
+    
+    # Sort character files by number
+    char_filenames.sort(key=lambda x: int(x.split("_")[1].split(".")[0]))
+    
+    # Load each character image
+    for filename in char_filenames:
+        filepath = os.path.join(LAB6_CHARACTERS_DIR, filename)
+        img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            # Convert to binary (0 for background, 1 for character)
+            _, binary = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+            # Invert so character is 1, background is 0
+            binary = cv2.bitwise_not(binary)
+            binary = binary / 255  # Normalize to 0-1
+            characters.append(binary)
+            logger.debug(f"Loaded character from {filename}")
+    
+    logger.info(f"Loaded {len(characters)} segmented characters")
+    return characters
 
-def binarize_image(img: np.ndarray) -> np.ndarray:
-    """Binarize the image."""
-    # Ensure image is grayscale
-    if len(img.shape) == 3:
-        # Convert RGB to grayscale
-        img_gray = np.mean(img, axis=2).astype(np.uint8)
-    else:
-        img_gray = img
+def calculate_character_features(char_img):
+    """
+    Calculate features for a character image.
     
-    # Binarize (invert if text is dark on light background)
-    binary_threshold = 128
-    img_bin = np.zeros_like(img_gray)
-    img_bin[img_gray < binary_threshold] = 255
-    
-    logger.info("Image binarized")
-    return img_bin
-
-def find_intervals(profile: np.ndarray, threshold: int = 5) -> List[Tuple[int, int]]:
-    """Find intervals in a profile where values are above threshold."""
-    intervals = []
-    start = None
-    
-    for i, value in enumerate(profile):
-        if value > threshold and start is None:
-            start = i
-        elif value <= threshold and start is not None:
-            # Filter out too small intervals
-            if i - start >= 2:
-                intervals.append((start, i))
-            start = None
-    
-    # Don't forget the last interval if it ends at the profile's end
-    if start is not None and len(profile) - start >= 2:
-        intervals.append((start, len(profile)))
+    Args:
+        char_img (numpy.ndarray): Binary character image (0-1 values)
         
-    return intervals
-
-def segment_text(img_bin: np.ndarray) -> List[Tuple[int, int, int, int]]:
-    """Segment text into character bounding boxes."""
-    # Calculate horizontal profile (sum along rows)
-    horizontal_profile = np.sum(img_bin, axis=1)
-    
-    # Find rows containing text
-    row_intervals = find_intervals(horizontal_profile)
-    logger.info(f"Found {len(row_intervals)} text rows")
-    
-    # For each text row, find character intervals
-    char_boxes = []
-    
-    for row_idx, (y1, y2) in enumerate(row_intervals):
-        # Extract the row and calculate its vertical profile
-        row = img_bin[y1:y2, :]
-        vertical_profile = np.sum(row, axis=0)
-        
-        # Find character intervals in this row
-        char_intervals = find_intervals(vertical_profile)
-        logger.info(f"Found {len(char_intervals)} characters in row {row_idx+1}")
-        
-        # Create bounding boxes for each character
-        for x1, x2 in char_intervals:
-            char_boxes.append((x1, y1, x2, y2))
-    
-    return char_boxes
-
-def extract_char_features(img_bin: np.ndarray, box: Tuple[int, int, int, int]) -> Dict:
-    """Extract features for a character defined by its bounding box."""
-    x1, y1, x2, y2 = box
-    
-    # Extract the character
-    char_img = img_bin[y1:y2, x1:x2]
+    Returns:
+        dict: Dictionary of features
+    """
     height, width = char_img.shape
     
-    # Invert if necessary (ensure character is 1, background is 0)
-    if np.mean(char_img) > 127:  # If mean is high, image is likely inverted
-        binary = (char_img < 128).astype(np.uint8)
-    else:
-        binary = (char_img >= 128).astype(np.uint8)
+    # Split the image into four quarters
+    h_mid = height // 2
+    w_mid = width // 2
     
-    # Calculate total weight (mass)
-    total_weight = np.sum(binary)
+    q1 = char_img[:h_mid, :w_mid]  # Top-left
+    q2 = char_img[:h_mid, w_mid:]  # Top-right
+    q3 = char_img[h_mid:, :w_mid]  # Bottom-left
+    q4 = char_img[h_mid:, w_mid:]  # Bottom-right
     
-    # If character has no weight (empty area), return default values
-    if total_weight == 0:
-        return {
-            'total_weight': 0,
-            'norm_cog_x': 0.5,
-            'norm_cog_y': 0.5,
-            'norm_moment_x': 0,
-            'norm_moment_y': 0
-        }
+    # Calculate weight (mass) of each quarter
+    weight_q1 = np.sum(q1)
+    weight_q2 = np.sum(q2)
+    weight_q3 = np.sum(q3)
+    weight_q4 = np.sum(q4)
+    total_weight = weight_q1 + weight_q2 + weight_q3 + weight_q4
     
     # Calculate center of gravity
-    y_indices, x_indices = np.indices(binary.shape)
-    cog_x = np.sum(x_indices * binary) / total_weight
-    cog_y = np.sum(y_indices * binary) / total_weight
+    y_indices, x_indices = np.indices(char_img.shape)
+    cog_x = np.sum(x_indices * char_img) / total_weight if total_weight > 0 else width / 2
+    cog_y = np.sum(y_indices * char_img) / total_weight if total_weight > 0 else height / 2
     
     # Normalize center of gravity
     norm_cog_x = cog_x / width
     norm_cog_y = cog_y / height
     
     # Calculate axial moments of inertia
-    moment_x = np.sum(((y_indices - cog_y) ** 2) * binary)
-    moment_y = np.sum(((x_indices - cog_x) ** 2) * binary)
+    moment_x = np.sum(((y_indices - cog_y) ** 2) * char_img)
+    moment_y = np.sum(((x_indices - cog_x) ** 2) * char_img)
     
     # Normalize moments
     norm_moment_x = moment_x / (total_weight * height ** 2) if total_weight > 0 else 0
     norm_moment_y = moment_y / (total_weight * width ** 2) if total_weight > 0 else 0
     
+    # Return dictionary of features
     return {
-        'total_weight': total_weight,
-        'norm_cog_x': norm_cog_x,
-        'norm_cog_y': norm_cog_y,
-        'norm_moment_x': norm_moment_x,
-        'norm_moment_y': norm_moment_y
+        'Weight_Q1': weight_q1,
+        'Weight_Q2': weight_q2,
+        'Weight_Q3': weight_q3,
+        'Weight_Q4': weight_q4,
+        'CoG_X': cog_x,
+        'CoG_Y': cog_y,
+        'NormCoG_X': norm_cog_x,
+        'NormCoG_Y': norm_cog_y,
+        'MomentOfInertia_X': moment_x,
+        'MomentOfInertia_Y': moment_y,
+        'NormMomentOfInertia_X': norm_moment_x,
+        'NormMomentOfInertia_Y': norm_moment_y
     }
 
-def calculate_similarity(char_features: Dict, reference_features: pd.DataFrame) -> List[Tuple[str, float]]:
-    """Calculate similarity between a character and all reference characters."""
+def compute_similarity(char_features, reference_features):
+    """
+    Compute similarity between character and reference based on Euclidean distance.
+    
+    Args:
+        char_features (dict): Features of the character to recognize
+        reference_features (pd.Series): Features of the reference character
+        
+    Returns:
+        float: Similarity measure (1 for exact match, decreasing for less similar)
+    """
+    # Define the features to use for comparison
+    feature_keys = [
+        'NormCoG_X', 'NormCoG_Y', 
+        'NormMomentOfInertia_X', 'NormMomentOfInertia_Y'
+    ]
+    
+    # Extract feature vectors
+    char_vector = np.array([char_features[key] for key in feature_keys])
+    ref_vector = np.array([reference_features[key] for key in feature_keys])
+    
+    # Calculate Euclidean distance
+    distance = euclidean(char_vector, ref_vector)
+    
+    # Convert distance to similarity (1 for exact match, decreasing for less similar)
+    # Using exponential decay to ensure positive values
+    similarity = np.exp(-distance)
+    
+    return similarity
+
+def recognize_character(char_img, reference_features):
+    """
+    Recognize a character by comparing with reference features.
+    
+    Args:
+        char_img (numpy.ndarray): Binary character image
+        reference_features (pd.DataFrame): DataFrame with reference features
+        
+    Returns:
+        list: List of tuples (char, similarity) sorted by similarity
+    """
+    # Calculate features for the character
+    char_features = calculate_character_features(char_img)
+    
+    # Calculate similarity with each reference character
     similarities = []
     
-    # Features to compare
-    feature_keys = ['total_weight', 'norm_cog_x', 'norm_cog_y', 'norm_moment_x', 'norm_moment_y']
-    
-    # Normalize the weight by getting an average reference weight
-    avg_reference_weight = reference_features['Weight_Q1'].sum() + reference_features['Weight_Q2'].sum() + \
-                           reference_features['Weight_Q3'].sum() + reference_features['Weight_Q4'].sum()
-    avg_reference_weight /= len(reference_features)
-    
-    # Create a normalized feature vector for the character
-    char_vector = np.array([
-        char_features['total_weight'] / avg_reference_weight,
-        char_features['norm_cog_x'],
-        char_features['norm_cog_y'],
-        char_features['norm_moment_x'],
-        char_features['norm_moment_y']
-    ])
-    
-    for _, row in reference_features.iterrows():
-        char = row['Character']
-        
-        # Create a normalized feature vector for the reference character
-        ref_total_weight = row['Weight_Q1'] + row['Weight_Q2'] + row['Weight_Q3'] + row['Weight_Q4']
-        ref_vector = np.array([
-            ref_total_weight / avg_reference_weight,
-            row['NormCoG_X'],
-            row['NormCoG_Y'],
-            row['NormMomentOfInertia_X'],
-            row['NormMomentOfInertia_Y']
-        ])
-        
-        # Calculate Euclidean distance
-        distance = np.linalg.norm(char_vector - ref_vector)
-        
-        # Convert distance to similarity (1 for identical, approaching 0 for very different)
-        # Using exponential decay to map distance to [0,1]
-        similarity = math.exp(-distance)
-        
-        similarities.append((char, similarity))
+    for _, reference in reference_features.iterrows():
+        char = reference['Character']
+        unicode_val = reference['Unicode']
+        similarity = compute_similarity(char_features, reference)
+        similarities.append((char, similarity, unicode_val))
     
     # Sort by similarity (descending)
     similarities.sort(key=lambda x: x[1], reverse=True)
     
-    return similarities
+    # Return list of tuples (char, similarity)
+    return [(char, similarity) for char, similarity, _ in similarities]
 
-def save_comparison_results(char_similarities: List[List[Tuple[str, float]]], original_text: str = ""):
-    """Save the comparison results to a file."""
-    result_path = os.path.join(RESULTS_DIR, "comparison_results.txt")
+def recognize_characters(characters, reference_features):
+    """
+    Recognize all segmented characters.
     
-    with open(result_path, 'w', encoding='utf-8') as f:
-        for i, similarities in enumerate(char_similarities):
-            f.write(f"{i+1}: {similarities}\n")
+    Args:
+        characters (list): List of character images
+        reference_features (pd.DataFrame): DataFrame with reference features
         
-        # Extract best guesses
-        best_guesses = [sim[0][0] for sim in char_similarities]
-        recognized_text = ''.join(best_guesses)
-        
-        f.write("\nRecognized text: " + recognized_text + "\n")
-        
-        if original_text:
-            # Calculate accuracy
-            correct = sum(1 for a, b in zip(original_text, recognized_text) if a == b)
-            total = max(len(original_text), len(recognized_text))
-            accuracy = (correct / total) * 100 if total > 0 else 0
-            
-            f.write(f"\nOriginal text: {original_text}\n")
-            f.write(f"Correctly recognized: {correct}/{total} characters ({accuracy:.2f}%)\n")
+    Returns:
+        list: List of recognition results, where each result is a list of tuples (char, similarity)
+    """
+    logger.info("Recognizing characters...")
     
-    logger.info(f"Comparison results saved to {result_path}")
-    return recognized_text, best_guesses
+    results = []
+    
+    for i, char_img in enumerate(characters):
+        logger.info(f"Recognizing character {i+1}/{len(characters)}")
+        result = recognize_character(char_img, reference_features)
+        results.append(result)
+    
+    return results
 
-def save_recognition_visualization(img: np.ndarray, char_boxes: List[Tuple[int, int, int, int]], 
-                                  best_guesses: List[str]):
-    """Save a visualization of the recognition results."""
-    # Convert to RGB for visualization
-    if len(img.shape) == 2:
-        img_rgb = np.stack([img] * 3, axis=2)
-    else:
-        img_rgb = img.copy()
+def save_recognition_results(results):
+    """
+    Save recognition results to a file.
     
-    # Draw bounding boxes and best guesses
-    for i, ((x1, y1, x2, y2), char) in enumerate(zip(char_boxes, best_guesses)):
-        # Draw bounding box
-        # Top horizontal line
-        img_rgb[y1:y1+2, x1:x2, 0] = 255  # Red
-        img_rgb[y1:y1+2, x1:x2, 1] = 0
-        img_rgb[y1:y1+2, x1:x2, 2] = 0
-        
-        # Bottom horizontal line
-        img_rgb[y2-2:y2, x1:x2, 0] = 255
-        img_rgb[y2-2:y2, x1:x2, 1] = 0
-        img_rgb[y2-2:y2, x1:x2, 2] = 0
-        
-        # Left vertical line
-        img_rgb[y1:y2, x1:x1+2, 0] = 255
-        img_rgb[y1:y2, x1:x1+2, 1] = 0
-        img_rgb[y1:y2, x1:x1+2, 2] = 0
-        
-        # Right vertical line
-        img_rgb[y1:y2, x2-2:x2, 0] = 255
-        img_rgb[y1:y2, x2-2:x2, 1] = 0
-        img_rgb[y1:y2, x2-2:x2, 2] = 0
-        
-        # Add character label on top of the box
-        # This is a simple implementation; for production, you might want to use
-        # a proper text rendering library that handles different languages
-        y_text = max(0, y1 - 15)
-        x_text = x1
-        
-        # Create a small white background for text
-        text_height = 15
-        text_width = 15
-        img_rgb[y_text:y_text+text_height, x_text:x_text+text_width, :] = [255, 255, 255]
-        
-        # Draw the character (approximation - in real application use proper text rendering)
-        img_rgb[y_text+2:y_text+text_height-2, x_text+2:x_text+text_width-2, 0] = 0
-        img_rgb[y_text+2:y_text+text_height-2, x_text+2:x_text+text_width-2, 1] = 0
-        img_rgb[y_text+2:y_text+text_height-2, x_text+2:x_text+text_width-2, 2] = 0
+    Args:
+        results (list): List of recognition results
+    """
+    logger.info("Saving recognition results...")
     
-    # Save visualization
-    result_path = os.path.join(RESULTS_DIR, "recognition_visualization.png")
-    plt.figure(figsize=(12, 8))
-    plt.imshow(img_rgb)
-    plt.axis('off')
-    plt.title('Character Recognition Results')
-    plt.tight_layout()
-    plt.savefig(result_path, dpi=150)
-    plt.close()
+    # Create output file
+    output_path = os.path.join(RESULTS_DIR, "recognition_results.txt")
     
-    logger.info(f"Recognition visualization saved to {result_path}")
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for i, result in enumerate(results):
+            f.write(f"{i+1}: {result}\n")
+    
+    logger.info(f"Results saved to {output_path}")
 
-def generate_test_image(text: str, font_size: int) -> str:
-    """Generate a test image with the given text and font size."""
-    output_path = os.path.join(RESULTS_DIR, f"test_image_size_{font_size}.png")
+def extract_best_hypothesis(results):
+    """
+    Extract best hypothesis (highest similarity) for each character.
+    
+    Args:
+        results (list): List of recognition results
+        
+    Returns:
+        str: String of best hypotheses
+    """
+    return ''.join([result[0][0] for result in results])
+
+def count_correct_recognitions(hypothesis, reference):
+    """
+    Count correct recognitions by comparing with reference.
+    
+    Args:
+        hypothesis (str): String of best hypotheses
+        reference (str): Reference string
+        
+    Returns:
+        tuple: Number of correct recognitions, total characters, percentage
+    """
+    # Ensure the strings have the same length
+    min_len = min(len(hypothesis), len(reference))
+    
+    # Count correct recognitions
+    correct = sum(1 for i in range(min_len) if hypothesis[i] == reference[i])
+    
+    # Calculate percentage
+    percentage = 100 * correct / len(reference) if len(reference) > 0 else 0
+    
+    return correct, len(reference), percentage
+
+def generate_different_size_image(reference_string, font_size_change):
+    """
+    Generate an image of the reference string with a different font size.
+    
+    Args:
+        reference_string (str): Reference string
+        font_size_change (int): Change in font size (positive or negative)
+        
+    Returns:
+        numpy.ndarray: Generated image
+    """
+    logger.info(f"Generating image with font size change of {font_size_change}")
+    
+    # Base font size from lab5
+    base_font_size = 52
+    new_font_size = base_font_size + font_size_change
+    
+    # Create a larger image to ensure text fits
+    img = Image.new('L', (800, 100), color=255)
     
     try:
-        # Create a larger image to ensure text fits
-        img_width, img_height = 800, 200
-        img = Image.new('RGB', (img_width, img_height), color=(255, 255, 255))
-        draw = ImageDraw.Draw(img)
-        
-        # Load font
-        font = ImageFont.truetype(FONT_PATH, font_size)
-        
-        # Calculate position to center the text
-        text_width = draw.textlength(text, font=font)
-        text_height = font_size  # Approximate
-        
-        # For right-to-left text like Hebrew, position from right side
-        position = (img_width - text_width - 50, (img_height - text_height) // 2)
-        
-        # Draw the text
-        draw.text(position, text, font=font, fill=(0, 0, 0))
-        
-        # Save the image
-        img.save(output_path)
-        logger.info(f"Generated test image with font size {font_size} at {output_path}")
-        
-        return output_path
+        font = ImageFont.truetype(FONT_PATH, new_font_size)
     except Exception as e:
-        logger.error(f"Failed to generate test image: {e}")
-        return ""
+        logger.error(f"Failed to load font: {e}")
+        return None
+    
+    draw = ImageDraw.Draw(img)
+    
+    # Draw the text
+    # Hebrew is right-to-left, so position accordingly
+    text_width = draw.textlength(reference_string, font=font)
+    position = (img.width - text_width - 10, 10)
+    draw.text(position, reference_string, font=font, fill=0)
+    
+    # Convert to numpy array
+    img_array = np.array(img)
+    
+    # Save generated image
+    output_path = os.path.join(RESULTS_DIR, f"generated_size_{new_font_size}.png")
+    cv2.imwrite(output_path, img_array)
+    
+    return img_array
+
+def segment_characters_from_image(image):
+    """
+    Segment characters from an image.
+    
+    Args:
+        image (numpy.ndarray): Input image
+        
+    Returns:
+        list: List of segmented character images
+    """
+    logger.info("Segmenting characters from generated image")
+    
+    # Binarize image
+    _, binary = cv2.threshold(image, 127, 255, cv2.THRESH_BINARY)
+    # Invert so text is white, background is black
+    binary_inv = cv2.bitwise_not(binary)
+    
+    # Calculate profiles
+    horizontal_profile = np.sum(binary_inv, axis=1)
+    vertical_profile = np.sum(binary_inv, axis=0)
+    
+    # Identify text lines
+    line_threshold = max(horizontal_profile) * 0.05
+    rows_with_text = np.where(horizontal_profile > line_threshold)[0]
+    
+    if len(rows_with_text) == 0:
+        logger.warning("No text lines detected")
+        return []
+    
+    # Group consecutive rows to identify lines
+    line_ranges = []
+    line_start = rows_with_text[0]
+    
+    for i in range(1, len(rows_with_text)):
+        if rows_with_text[i] - rows_with_text[i-1] > 1:  # Gap between text lines
+            line_end = rows_with_text[i-1]
+            line_ranges.append((line_start, line_end))
+            line_start = rows_with_text[i]
+    
+    # Add the last line
+    line_ranges.append((line_start, rows_with_text[-1]))
+    
+    # For each line, identify characters using vertical profile
+    bounding_boxes = []
+    
+    for line_start, line_end in line_ranges:
+        # Extract vertical profile for this line only
+        line_image = binary_inv[line_start:line_end+1, :]
+        line_vertical_profile = np.sum(line_image, axis=0)
+        
+        # Threshold for character detection
+        char_threshold = max(line_vertical_profile) * 0.05
+        
+        # Find columns where profile exceeds threshold
+        cols_with_text = np.where(line_vertical_profile > char_threshold)[0]
+        
+        if len(cols_with_text) == 0:
+            continue
+        
+        # Group consecutive columns to identify characters
+        char_start = cols_with_text[0]
+        
+        for i in range(1, len(cols_with_text)):
+            if cols_with_text[i] - cols_with_text[i-1] > 1:  # Gap between characters
+                char_end = cols_with_text[i-1]
+                
+                # Create bounding box (x, y, width, height)
+                x = char_start
+                y = line_start
+                w = char_end - char_start + 1
+                h = line_end - line_start + 1
+                
+                bounding_boxes.append((x, y, w, h))
+                
+                char_start = cols_with_text[i]
+        
+        # Add the last character in the line
+        char_end = cols_with_text[-1]
+        x = char_start
+        y = line_start
+        w = char_end - char_start + 1
+        h = line_end - line_start + 1
+        
+        bounding_boxes.append((x, y, w, h))
+    
+    # Sort bounding boxes from right to left (for Hebrew)
+    bounding_boxes.sort(key=lambda box: -box[0])
+    
+    # Extract character images
+    characters = []
+    for i, (x, y, w, h) in enumerate(bounding_boxes):
+        char_img = binary_inv[y:y+h, x:x+w]
+        
+        # Normalize to 0-1
+        char_img = char_img / 255
+        
+        characters.append(char_img)
+        
+        # Save character image
+        output_path = os.path.join(RESULTS_DIR, f"gen_char_{i+1}.png")
+        cv2.imwrite(output_path, char_img * 255)
+    
+    logger.info(f"Segmented {len(characters)} characters from generated image")
+    return characters
 
 def main():
-    """Main function to execute all tasks."""
-    logger.info("Starting Lab 7 - Classification based on features")
+    """Main function."""
+    logger.info("Starting recognition process")
     
-    # Load features from lab5
+    # Load reference features from lab5
     reference_features = load_features()
     
-    # Task 1-5: Classify characters in the text from lab6
-    # Load and preprocess the image
-    img = load_image(TEST_IMAGE_PATH)
-    img_bin = binarize_image(img)
+    # Load segmented characters from lab6
+    segmented_chars = load_segmented_characters()
     
-    # Segment text into characters
-    char_boxes = segment_text(img_bin)
-    logger.info(f"Segmented {len(char_boxes)} characters")
+    # Задание 1-2: Recognize characters based on features
+    recognition_results = recognize_characters(segmented_chars, reference_features)
     
-    # Calculate features and similarities for each character
-    char_similarities = []
+    # Задание 3: Save recognition results
+    save_recognition_results(recognition_results)
     
-    for i, box in enumerate(char_boxes):
-        # Extract features
-        char_features = extract_char_features(img_bin, box)
+    # Задание 4: Extract best hypothesis
+    best_hypothesis = extract_best_hypothesis(recognition_results)
+    logger.info(f"Best hypothesis: {best_hypothesis}")
+    
+    # Задание 5: Count correct recognitions
+    # The original phrase is not known, so we need to get it
+    # Since Hebrew is right-to-left, we need to manually input the reference string
+    # This would be the phrase from lab6/phrase.bmp
+    reference_string = "מילים עבריות לדוגמה"  # Replace with actual phrase
+    
+    correct, total, percentage = count_correct_recognitions(best_hypothesis, reference_string)
+    logger.info(f"Correct recognitions: {correct}/{total} ({percentage:.2f}%)")
+    
+    # Save recognition accuracy
+    with open(os.path.join(RESULTS_DIR, "recognition_accuracy.txt"), 'w', encoding='utf-8') as f:
+        f.write(f"Reference string: {reference_string}\n")
+        f.write(f"Recognized string: {best_hypothesis}\n")
+        f.write(f"Correct recognitions: {correct}/{total} ({percentage:.2f}%)\n")
+    
+    # Задание 6: Generate a different size image and recognize it
+    font_size_change = 4  # Increase font size by 4 points
+    different_size_image = generate_different_size_image(reference_string, font_size_change)
+    
+    if different_size_image is not None:
+        # Segment characters from the generated image
+        different_size_chars = segment_characters_from_image(different_size_image)
         
-        # Calculate similarity with all reference characters
-        similarities = calculate_similarity(char_features, reference_features)
-        char_similarities.append(similarities)
+        # Recognize the segmented characters
+        different_size_results = recognize_characters(different_size_chars, reference_features)
         
-        logger.info(f"Character {i+1}: Best match is '{similarities[0][0]}' with similarity {similarities[0][1]:.4f}")
+        # Save recognition results
+        output_path = os.path.join(RESULTS_DIR, "different_size_results.txt")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for i, result in enumerate(different_size_results):
+                f.write(f"{i+1}: {result}\n")
+        
+        # Extract best hypothesis
+        different_size_hypothesis = extract_best_hypothesis(different_size_results)
+        
+        # Count correct recognitions
+        correct_diff, total_diff, percentage_diff = count_correct_recognitions(
+            different_size_hypothesis, reference_string
+        )
+        
+        logger.info(f"Different size recognition: {correct_diff}/{total_diff} ({percentage_diff:.2f}%)")
+        
+        # Save different size accuracy
+        with open(os.path.join(RESULTS_DIR, "different_size_accuracy.txt"), 'w', encoding='utf-8') as f:
+            f.write(f"Reference string: {reference_string}\n")
+            f.write(f"Font size change: {font_size_change}\n")
+            f.write(f"Recognized string: {different_size_hypothesis}\n")
+            f.write(f"Correct recognitions: {correct_diff}/{total_diff} ({percentage_diff:.2f}%)\n")
+        
+        # Compare the two recognitions
+        with open(os.path.join(RESULTS_DIR, "comparison.txt"), 'w', encoding='utf-8') as f:
+            f.write(f"Original recognition: {percentage:.2f}%\n")
+            f.write(f"Different size recognition: {percentage_diff:.2f}%\n")
+            f.write(f"Difference: {percentage_diff - percentage:.2f}%\n")
     
-    # Save comparison results
-    recognized_text, best_guesses = save_comparison_results(char_similarities)
-    
-    # Save visualization
-    save_recognition_visualization(img, char_boxes, best_guesses)
-    
-    # Task 6: Generate test image with different font size and recognize it
-    # Extract the first row of text from the recognized text (to use as test text)
-    # For simplicity, we'll use a small portion of the recognized text
-    test_text = recognized_text[:10] if len(recognized_text) > 10 else recognized_text
-    
-    # Try with a different font size
-    different_font_size = FONT_SIZE + 10  # 10 points larger
-    test_image_path = generate_test_image(test_text, different_font_size)
-    
-    if test_image_path:
-        # Recognize the generated test image
-        test_img = load_image(test_image_path)
-        test_img_bin = binarize_image(test_img)
-        
-        # Segment text into characters
-        test_char_boxes = segment_text(test_img_bin)
-        logger.info(f"Segmented {len(test_char_boxes)} characters in test image")
-        
-        # Calculate features and similarities for each character
-        test_char_similarities = []
-        
-        for i, box in enumerate(test_char_boxes):
-            # Extract features
-            char_features = extract_char_features(test_img_bin, box)
-            
-            # Calculate similarity with all reference characters
-            similarities = calculate_similarity(char_features, reference_features)
-            test_char_similarities.append(similarities)
-            
-            logger.info(f"Test Character {i+1}: Best match is '{similarities[0][0]}' with similarity {similarities[0][1]:.4f}")
-        
-        # Save comparison results for the test image
-        test_result_path = os.path.join(RESULTS_DIR, "test_comparison_results.txt")
-        test_recognized_text, test_best_guesses = save_comparison_results(test_char_similarities, test_text)
-        
-        # Save visualization for the test image
-        test_result_viz_path = os.path.join(RESULTS_DIR, "test_recognition_visualization.png")
-        save_recognition_visualization(test_img, test_char_boxes, test_best_guesses)
-        
-        # Compare results
-        logger.info(f"Original text: {test_text}")
-        logger.info(f"Recognized text (original font size): {recognized_text}")
-        logger.info(f"Recognized text (different font size): {test_recognized_text}")
-    
-    logger.info("Lab 7 completed successfully!")
+    logger.info("Recognition process completed")
 
 if __name__ == "__main__":
     main()

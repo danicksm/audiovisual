@@ -1,0 +1,4 @@
+Reference string: מילים עבריות לדוגמה
+Font size change: 4
+Recognized string: סדקדסשםךדהחקדהםסק
+Correct recognitions: 0/19 (0.00%)

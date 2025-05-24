@@ -1,0 +1,3 @@
+Original recognition: 0.00%
+Different size recognition: 0.00%
+Difference: 0.00%
