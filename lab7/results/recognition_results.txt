@@ -1,4 +1,0 @@
-Original phrase: יקדובצץזשך
-Recognized phrase: םםקךםםקקקך
-Number of errors: 9 out of 10
-Recognition accuracy: 10.00%

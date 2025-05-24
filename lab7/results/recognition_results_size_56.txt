@@ -1,5 +1,0 @@
-Font size: 56
-Original phrase: יקדובצץזשך
-Recognized phrase: םםקךםבםקקקך
-Number of errors: 10 out of 10
-Recognition accuracy: 0.00%

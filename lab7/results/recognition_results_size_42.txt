@@ -1,5 +1,0 @@
-Font size: 42
-Original phrase: יקדובצץזשך
-Recognized phrase: יקדובצץזשך
-Number of errors: 0 out of 10
-Recognition accuracy: 100.00%
